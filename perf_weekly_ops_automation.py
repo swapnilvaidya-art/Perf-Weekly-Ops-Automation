@@ -188,7 +188,7 @@ current_time = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%b-%Y %H:%M:%
 for attempt in range(1, 6):
     try:
         ws_main.update(
-            range_name="B2",
+            range_name="B1",
             values=[[current_time]]
         )
         break
