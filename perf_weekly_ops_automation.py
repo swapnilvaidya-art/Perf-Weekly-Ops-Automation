@@ -188,7 +188,7 @@ current_time = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%b-%Y %H:%M:%
 for attempt in range(1, 6):
     try:
         ws_main.update(
-            range_name="B29",
+            range_name="B2",
             values=[[current_time]]
         )
         break
@@ -196,7 +196,8 @@ for attempt in range(1, 6):
         print(f"[Sheets] Timestamp update attempt {attempt} failed: {e}")
         time.sleep(10 * attempt)
 
-print(f"✅ Updated timestamp: {current_time}")
+print(f"✅ Updated timestamp in B2: {current_time}")
+
 
 
 # ======================================================
