@@ -105,21 +105,37 @@ def safe_update_range(worksheet, df, start_cell="A1", retries=5, base_delay=15):
         print(f"⚠️ {worksheet.title} dataframe empty — skipping update")
         return
 
+    # Prepare values
     values = [df.columns.tolist()] + (
         df.astype(str).fillna("").values.tolist()
     )
 
+    rows = len(values)
+    cols = len(values[0])
+
+    # Convert col number → Excel column letter (A, B, C, ...)
+    def col_letter(n):
+        s = ""
+        while n:
+            n, r = divmod(n - 1, 26)
+            s = chr(65 + r) + s
+        return s
+
+    end_col = col_letter(cols)
+    clear_range = f"A1:{end_col}{rows}"
+
     for attempt in range(1, retries + 1):
         try:
-            worksheet.clear()
-            time.sleep(3)
+            # 🔑 Clear ONLY the data range, not entire sheet
+            worksheet.batch_clear([clear_range])
+            time.sleep(2)
 
             worksheet.update(
                 range_name=start_cell,
                 values=values
             )
 
-            print(f"✅ {worksheet.title} updated successfully")
+            print(f"✅ {worksheet.title} updated successfully (formulas preserved)")
             return
 
         except Exception as e:
