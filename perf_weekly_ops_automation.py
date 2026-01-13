@@ -8,7 +8,6 @@ import pandas as pd
 import gspread
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from gspread_dataframe import set_with_dataframe
 from google.oauth2.service_account import Credentials
 from concurrent.futures import ThreadPoolExecutor
 
@@ -77,8 +76,7 @@ res = requests.post(
 )
 
 res.raise_for_status()
-session_token = res.json()["id"]
-METABASE_HEADERS["X-Metabase-Session"] = session_token
+METABASE_HEADERS["X-Metabase-Session"] = res.json()["id"]
 
 print("✅ Metabase session created")
 
@@ -100,45 +98,37 @@ def fetch_with_retry(url, headers, retries=5, base_delay=10):
                 raise
 
 
-def safe_update_range(worksheet, df, data_range, retries=5, base_delay=10):
+def safe_update_range(worksheet, df, start_cell="A1", retries=5, base_delay=15):
     print(f"🔄 Updating sheet: {worksheet.title}")
 
-    # Skip empty dataframe
     if df.empty:
         print(f"⚠️ {worksheet.title} dataframe empty — skipping update")
         return
 
-    # -------- Backup Fetch with Retry --------
-    for attempt in range(1, retries + 1):
-        try:
-            backup_data = worksheet.get(data_range)
-            break
-        except Exception as e:
-            print(f"[Sheets] Backup fetch attempt {attempt} failed: {e}")
-            if attempt < retries:
-                time.sleep(base_delay * attempt)
-            else:
-                raise
+    values = [df.columns.tolist()] + (
+        df.astype(str).fillna("").values.tolist()
+    )
 
-    # -------- Write with Retry --------
     for attempt in range(1, retries + 1):
         try:
-            set_with_dataframe(
-                worksheet,
-                df,
-                include_index=False,
-                include_column_header=True,
-                resize=False
+            worksheet.clear()
+            time.sleep(3)
+
+            worksheet.update(
+                range_name=start_cell,
+                values=values
             )
+
             print(f"✅ {worksheet.title} updated successfully")
             return
+
         except Exception as e:
             print(f"[Sheets] Update attempt {attempt} failed: {e}")
             if attempt < retries:
-                time.sleep(base_delay * attempt)
+                sleep_time = base_delay * attempt
+                print(f"⏳ Retrying in {sleep_time}s...")
+                time.sleep(sleep_time)
             else:
-                print(f"❌ Restoring backup for {worksheet.title}")
-                worksheet.update(data_range, backup_data)
                 raise
 
 
@@ -180,14 +170,14 @@ ws_main = sheet.worksheet("BOFU Ops")
 # ======================================================
 # UPDATE SHEETS (SEQUENTIAL + COOLDOWN)
 # ======================================================
-safe_update_range(ws_assigned, df_Assigned, "A:F")
-time.sleep(10)
+safe_update_range(ws_assigned, df_Assigned, "A1")
+time.sleep(20)
 
-safe_update_range(ws_calls, df_Calls, "A:E")
-time.sleep(10)
+safe_update_range(ws_calls, df_Calls, "A1")
+time.sleep(20)
 
-safe_update_range(ws_stage, df_StageChange, "A:E")
-time.sleep(10)
+safe_update_range(ws_stage, df_StageChange, "A1")
+time.sleep(20)
 
 
 # ======================================================
@@ -197,7 +187,10 @@ current_time = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%b-%Y %H:%M:%
 
 for attempt in range(1, 6):
     try:
-        ws_main.update("B29", [[current_time]])
+        ws_main.update(
+            range_name="B29",
+            values=[[current_time]]
+        )
         break
     except Exception as e:
         print(f"[Sheets] Timestamp update attempt {attempt} failed: {e}")
