@@ -13,34 +13,45 @@ from google.oauth2.service_account import Credentials
 from concurrent.futures import ThreadPoolExecutor
 
 
-# -------------------- START TIMER --------------------
+# ======================================================
+# START TIMER
+# ======================================================
 start_time = time.time()
 
-# -------------------- ENV & AUTH (GitHub Secrets) --------------------
-sec = os.environ.get("PRABHAT_SECRET_KEY")
-User_name = os.environ.get("USERNAME")
-service_account_json = os.environ.get("SERVICE_ACCOUNT_JSON")
-MB_URl = os.environ.get("METABASE_URL")
 
-# -------------------- METABASE QUERIES --------------------
-ASSIGNED_QUERY_Var = os.environ.get("ASSIGNED_QUERY")
-CALLING_QUERY_Var = os.environ.get("CALLING_QUERY")
-STAGE_CHANGE_QUERY_Var = os.environ.get("STAGE_CHANGE_QUERY")
+# ======================================================
+# ENVIRONMENT VARIABLES
+# ======================================================
+PRABHAT_SECRET_KEY = os.getenv("PRABHAT_SECRET_KEY")
+USERNAME = os.getenv("USERNAME")
+SERVICE_ACCOUNT_JSON = os.getenv("SERVICE_ACCOUNT_JSON")
+METABASE_URL = os.getenv("METABASE_URL")
 
-# -------------------- GOOGLE SHEET --------------------
-SAK = os.environ.get("SHEET_ACCESS_KEY")
+ASSIGNED_QUERY = os.getenv("ASSIGNED_QUERY")
+CALLING_QUERY = os.getenv("CALLING_QUERY")
+STAGE_CHANGE_QUERY = os.getenv("STAGE_CHANGE_QUERY")
 
-# -------------------- VALIDATION --------------------
+SHEET_ACCESS_KEY = os.getenv("SHEET_ACCESS_KEY")
+
 required_vars = [
-    sec, User_name, service_account_json, MB_URl,
-    ASSIGNED_QUERY_Var, CALLING_QUERY_Var, STAGE_CHANGE_QUERY_Var, SAK
+    PRABHAT_SECRET_KEY,
+    USERNAME,
+    SERVICE_ACCOUNT_JSON,
+    METABASE_URL,
+    ASSIGNED_QUERY,
+    CALLING_QUERY,
+    STAGE_CHANGE_QUERY,
+    SHEET_ACCESS_KEY
 ]
 
 if not all(required_vars):
-    raise ValueError("❌ Missing one or more required environment variables. Check GitHub Secrets.")
+    raise ValueError("❌ Missing required environment variables. Check GitHub Secrets.")
 
-# -------------------- GOOGLE AUTH --------------------
-service_info = json.loads(service_account_json)
+
+# ======================================================
+# GOOGLE SHEETS AUTH
+# ======================================================
+service_info = json.loads(SERVICE_ACCOUNT_JSON)
 
 creds = Credentials.from_service_account_info(
     service_info,
@@ -52,64 +63,94 @@ creds = Credentials.from_service_account_info(
 
 gc = gspread.authorize(creds)
 
-# -------------------- METABASE AUTH --------------------
-METABASE_HEADERS = {'Content-Type': 'application/json'}
+
+# ======================================================
+# METABASE AUTH
+# ======================================================
+METABASE_HEADERS = {"Content-Type": "application/json"}
 
 res = requests.post(
-    MB_URl,
-    headers={"Content-Type": "application/json"},
-    json={"username": User_name.strip(), "password": sec},
+    METABASE_URL,
+    headers=METABASE_HEADERS,
+    json={"username": USERNAME.strip(), "password": PRABHAT_SECRET_KEY},
     timeout=60
 )
 
 res.raise_for_status()
-token = res.json()["id"]
-METABASE_HEADERS["X-Metabase-Session"] = token
+session_token = res.json()["id"]
+METABASE_HEADERS["X-Metabase-Session"] = session_token
 
 print("✅ Metabase session created")
 
-# -------------------- UTILITIES --------------------
-def fetch_with_retry(url, headers, retries=5, delay=15):
+
+# ======================================================
+# UTILITIES
+# ======================================================
+def fetch_with_retry(url, headers, retries=5, base_delay=10):
     for attempt in range(1, retries + 1):
         try:
-            r = requests.post(url, headers=headers, timeout=120)
+            r = requests.post(url, headers=headers, timeout=180)
             r.raise_for_status()
             return r
         except Exception as e:
             print(f"[Metabase] Attempt {attempt} failed: {e}")
             if attempt < retries:
-                time.sleep(delay)
+                time.sleep(base_delay * attempt)
             else:
                 raise
 
 
-def safe_update_range(worksheet, df, data_range):
-    print(f"🔄 Updating {worksheet.title}")
+def safe_update_range(worksheet, df, data_range, retries=5, base_delay=10):
+    print(f"🔄 Updating sheet: {worksheet.title}")
 
-    backup_data = worksheet.get(data_range)
+    # Skip empty dataframe
+    if df.empty:
+        print(f"⚠️ {worksheet.title} dataframe empty — skipping update")
+        return
 
-    try:
-        set_with_dataframe(
-            worksheet,
-            df,
-            include_index=False,
-            include_column_header=True,
-            resize=False
-        )
-        print(f"✅ {worksheet.title} updated")
-    except Exception as e:
-        print(f"❌ Update failed for {worksheet.title}, restoring backup")
-        worksheet.update(data_range, backup_data)
-        raise e
+    # -------- Backup Fetch with Retry --------
+    for attempt in range(1, retries + 1):
+        try:
+            backup_data = worksheet.get(data_range)
+            break
+        except Exception as e:
+            print(f"[Sheets] Backup fetch attempt {attempt} failed: {e}")
+            if attempt < retries:
+                time.sleep(base_delay * attempt)
+            else:
+                raise
+
+    # -------- Write with Retry --------
+    for attempt in range(1, retries + 1):
+        try:
+            set_with_dataframe(
+                worksheet,
+                df,
+                include_index=False,
+                include_column_header=True,
+                resize=False
+            )
+            print(f"✅ {worksheet.title} updated successfully")
+            return
+        except Exception as e:
+            print(f"[Sheets] Update attempt {attempt} failed: {e}")
+            if attempt < retries:
+                time.sleep(base_delay * attempt)
+            else:
+                print(f"❌ Restoring backup for {worksheet.title}")
+                worksheet.update(data_range, backup_data)
+                raise
 
 
-# -------------------- MAIN LOGIC --------------------
+# ======================================================
+# MAIN LOGIC
+# ======================================================
 print("Fetching Assigned + Calls + StageChange in parallel...")
 
 urls = {
-    "Assigned": ASSIGNED_QUERY_Var.strip(),
-    "Calls": CALLING_QUERY_Var.strip(),
-    "StageChange": STAGE_CHANGE_QUERY_Var.strip()
+    "Assigned": ASSIGNED_QUERY.strip(),
+    "Calls": CALLING_QUERY.strip(),
+    "StageChange": STAGE_CHANGE_QUERY.strip()
 }
 
 with ThreadPoolExecutor(max_workers=3) as executor:
@@ -123,33 +164,53 @@ df_Assigned = pd.DataFrame(results["Assigned"].json())
 df_Calls = pd.DataFrame(results["Calls"].json())
 df_StageChange = pd.DataFrame(results["StageChange"].json())
 
-# -------------------- GOOGLE SHEETS --------------------
+
+# ======================================================
+# GOOGLE SHEETS
+# ======================================================
 print("Connecting to Google Sheets...")
-sheet = gc.open_by_key(SAK)
+sheet = gc.open_by_key(SHEET_ACCESS_KEY)
 
-ws_1 = sheet.worksheet("Assigned")
-ws_2 = sheet.worksheet("Calls")
-ws_3 = sheet.worksheet("StageChange")
-main_sheet = sheet.worksheet("BOFU Ops")
+ws_assigned = sheet.worksheet("Assigned")
+ws_calls = sheet.worksheet("Calls")
+ws_stage = sheet.worksheet("StageChange")
+ws_main = sheet.worksheet("BOFU Ops")
 
-# -------------------- UPDATE SHEETS --------------------
-safe_update_range(ws_1, df_Assigned, "A:F")
-time.sleep(3)
 
-safe_update_range(ws_2, df_Calls, "A:E")
-time.sleep(3)
+# ======================================================
+# UPDATE SHEETS (SEQUENTIAL + COOLDOWN)
+# ======================================================
+safe_update_range(ws_assigned, df_Assigned, "A:F")
+time.sleep(10)
 
-safe_update_range(ws_3, df_StageChange, "A:E")
+safe_update_range(ws_calls, df_Calls, "A:E")
+time.sleep(10)
 
-# -------------------- UPDATE TIMESTAMP --------------------
+safe_update_range(ws_stage, df_StageChange, "A:E")
+time.sleep(10)
+
+
+# ======================================================
+# UPDATE TIMESTAMP
+# ======================================================
 current_time = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%b-%Y %H:%M:%S")
-main_sheet.update("B29", [[current_time]])
+
+for attempt in range(1, 6):
+    try:
+        ws_main.update("B29", [[current_time]])
+        break
+    except Exception as e:
+        print(f"[Sheets] Timestamp update attempt {attempt} failed: {e}")
+        time.sleep(10 * attempt)
 
 print(f"✅ Updated timestamp: {current_time}")
 
-# -------------------- TIMER SUMMARY --------------------
+
+# ======================================================
+# TIMER SUMMARY
+# ======================================================
 elapsed_time = time.time() - start_time
 mins, secs = divmod(elapsed_time, 60)
 
 print(f"⏱ Total time taken: {int(mins)}m {int(secs)}s")
-print("🎯 Workflow completed successfully!")
+print("🎯 Perf Weekly Ops Automation completed successfully!")
