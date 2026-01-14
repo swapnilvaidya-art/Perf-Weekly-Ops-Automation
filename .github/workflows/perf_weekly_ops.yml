@@ -1,9 +1,9 @@
 name: Run Perf Weekly Ops Automation
 
 on:
-  # Runs every 2 hours (UTC)
+  # Runs once a day at 02:00 UTC
   schedule:
-    - cron: '0 */2 * * *'
+    - cron: '0 2 * * *'
 
   # Manual trigger
   workflow_dispatch:
