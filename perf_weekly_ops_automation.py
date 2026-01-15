@@ -9,7 +9,6 @@ import gspread
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from google.oauth2.service_account import Credentials
-from concurrent.futures import ThreadPoolExecutor
 
 
 # ======================================================
@@ -27,9 +26,6 @@ SERVICE_ACCOUNT_JSON = os.getenv("SERVICE_ACCOUNT_JSON")
 METABASE_URL = os.getenv("METABASE_URL")
 
 ASSIGNED_QUERY = os.getenv("ASSIGNED_QUERY")
-CALLING_QUERY = os.getenv("CALLING_QUERY")
-STAGE_CHANGE_QUERY = os.getenv("STAGE_CHANGE_QUERY")
-
 SHEET_ACCESS_KEY = os.getenv("SHEET_ACCESS_KEY")
 
 required_vars = [
@@ -38,8 +34,6 @@ required_vars = [
     SERVICE_ACCOUNT_JSON,
     METABASE_URL,
     ASSIGNED_QUERY,
-    CALLING_QUERY,
-    STAGE_CHANGE_QUERY,
     SHEET_ACCESS_KEY
 ]
 
@@ -105,15 +99,10 @@ def safe_update_range(worksheet, df, start_cell="A1", retries=5, base_delay=15):
         print(f"⚠️ {worksheet.title} dataframe empty — skipping update")
         return
 
-    # Prepare values
-    values = [df.columns.tolist()] + (
-        df.astype(str).fillna("").values.tolist()
-    )
-
+    values = [df.columns.tolist()] + df.astype(str).fillna("").values.tolist()
     rows = len(values)
     cols = len(values[0])
 
-    # Convert col number → Excel column letter (A, B, C, ...)
     def col_letter(n):
         s = ""
         while n:
@@ -126,7 +115,6 @@ def safe_update_range(worksheet, df, start_cell="A1", retries=5, base_delay=15):
 
     for attempt in range(1, retries + 1):
         try:
-            # 🔑 Clear ONLY the data range, not entire sheet
             worksheet.batch_clear([clear_range])
             time.sleep(2)
 
@@ -135,7 +123,7 @@ def safe_update_range(worksheet, df, start_cell="A1", retries=5, base_delay=15):
                 values=values
             )
 
-            print(f"✅ {worksheet.title} updated successfully (formulas preserved)")
+            print(f"✅ {worksheet.title} updated successfully")
             return
 
         except Exception as e:
@@ -151,24 +139,10 @@ def safe_update_range(worksheet, df, start_cell="A1", retries=5, base_delay=15):
 # ======================================================
 # MAIN LOGIC
 # ======================================================
-print("Fetching Assigned + Calls + StageChange in parallel...")
+print("Fetching Assigned data...")
 
-urls = {
-    "Assigned": ASSIGNED_QUERY.strip(),
-    "Calls": CALLING_QUERY.strip(),
-    "StageChange": STAGE_CHANGE_QUERY.strip()
-}
-
-with ThreadPoolExecutor(max_workers=3) as executor:
-    futures = {
-        name: executor.submit(fetch_with_retry, url, METABASE_HEADERS)
-        for name, url in urls.items()
-    }
-    results = {name: f.result() for name, f in futures.items()}
-
-df_Assigned = pd.DataFrame(results["Assigned"].json())
-df_Calls = pd.DataFrame(results["Calls"].json())
-df_StageChange = pd.DataFrame(results["StageChange"].json())
+resp = fetch_with_retry(ASSIGNED_QUERY.strip(), METABASE_HEADERS)
+df_Assigned = pd.DataFrame(resp.json())
 
 
 # ======================================================
@@ -178,26 +152,18 @@ print("Connecting to Google Sheets...")
 sheet = gc.open_by_key(SHEET_ACCESS_KEY)
 
 ws_assigned = sheet.worksheet("Assigned")
-ws_calls = sheet.worksheet("Calls")
-ws_stage = sheet.worksheet("StageChange")
 ws_main = sheet.worksheet("BOFU Ops")
 
 
 # ======================================================
-# UPDATE SHEETS (SEQUENTIAL + COOLDOWN)
+# UPDATE ASSIGNED SHEET
 # ======================================================
 safe_update_range(ws_assigned, df_Assigned, "A1")
 time.sleep(20)
 
-safe_update_range(ws_calls, df_Calls, "A1")
-time.sleep(20)
-
-safe_update_range(ws_stage, df_StageChange, "A1")
-time.sleep(20)
-
 
 # ======================================================
-# UPDATE TIMESTAMP
+# UPDATE TIMESTAMP (B1)
 # ======================================================
 current_time = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%b-%Y %H:%M:%S")
 
@@ -212,8 +178,7 @@ for attempt in range(1, 6):
         print(f"[Sheets] Timestamp update attempt {attempt} failed: {e}")
         time.sleep(10 * attempt)
 
-print(f"✅ Updated timestamp in B2: {current_time}")
-
+print(f"✅ Updated timestamp in B1: {current_time}")
 
 
 # ======================================================
@@ -223,4 +188,4 @@ elapsed_time = time.time() - start_time
 mins, secs = divmod(elapsed_time, 60)
 
 print(f"⏱ Total time taken: {int(mins)}m {int(secs)}s")
-print("🎯 Perf Weekly Ops Automation completed successfully!")
+print("🎯 Assigned automation completed successfully!")
