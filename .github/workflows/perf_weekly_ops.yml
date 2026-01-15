@@ -1,5 +1,10 @@
 name: Run Perf Weekly Ops Automation
 
+# 🔐 Prevent overlapping / queued runs
+concurrency:
+  group: perf-weekly-ops
+  cancel-in-progress: true
+
 on:
   # Runs once a day at 02:00 UTC
   schedule:
@@ -29,54 +34,30 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Step 4: Prevent overlapping runs & execute script
-      - name: Execute perf_weekly_ops_automation.py safely
+      # Step 4: Execute perf_weekly_ops_automation.py
+      - name: Execute perf_weekly_ops_automation.py
         env:
           PRABHAT_SECRET_KEY: ${{ secrets.PRABHAT_SECRET_KEY }}
           USERNAME: ${{ secrets.USERNAME }}
           METABASE_URL: ${{ secrets.METABASE_URL }}
           SERVICE_ACCOUNT_JSON: ${{ secrets.SERVICE_ACCOUNT_JSON }}
-
           ASSIGNED_QUERY: ${{ secrets.ASSIGNED_QUERY }}
-          CALLING_QUERY: ${{ secrets.CALLING_QUERY }}
-          STAGE_CHANGE_QUERY: ${{ secrets.STAGE_CHANGE_QUERY }}
-
           SHEET_ACCESS_KEY: ${{ secrets.SHEET_ACCESS_KEY }}
 
         run: |
-          LOCK_FILE=".perf_weekly_ops.lock"
-
           echo "=============================="
           echo "Workflow triggered at UTC: $(date -u)"
-          echo "Current branch: $GITHUB_REF"
-          echo "Repository path: $GITHUB_WORKSPACE"
+          echo "Branch: $GITHUB_REF"
+          echo "Repo path: $GITHUB_WORKSPACE"
           echo "=============================="
 
-          # Prevent overlapping runs
-          if [ -f $LOCK_FILE ]; then
-            echo "⚠️ Previous run still in progress. Exiting."
-            exit 0
-          fi
-
-          # Create lock file
-          touch $LOCK_FILE
           echo "🚀 Starting perf_weekly_ops_automation.py..."
 
           # Safe sanity logs
-          echo "Using Metabase URL: ${METABASE_URL:0:30}****"
-          echo "USERNAME variable: ${USERNAME:+[SET]}"
+          echo "Metabase URL: ${METABASE_URL:0:30}****"
+          echo "USERNAME: ${USERNAME:+[SET]}"
           echo "SERVICE_ACCOUNT_JSON: ${SERVICE_ACCOUNT_JSON:+[SET]}"
 
-          # Run the Python script
           python perf_weekly_ops_automation.py
-          EXIT_CODE=$?
 
-          # Cleanup lock file
-          rm -f $LOCK_FILE
-
-          if [ $EXIT_CODE -eq 0 ]; then
-            echo "✅ perf_weekly_ops_automation.py completed successfully."
-          else
-            echo "❌ Script failed with exit code $EXIT_CODE."
-            exit $EXIT_CODE
-          fi
+          echo "✅ perf_weekly_ops_automation.py completed successfully."
