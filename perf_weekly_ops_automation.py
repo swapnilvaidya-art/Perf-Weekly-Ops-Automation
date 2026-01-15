@@ -65,7 +65,10 @@ METABASE_HEADERS = {"Content-Type": "application/json"}
 res = requests.post(
     METABASE_URL,
     headers=METABASE_HEADERS,
-    json={"username": USERNAME.strip(), "password": PRABHAT_SECRET_KEY},
+    json={
+        "username": USERNAME.strip(),
+        "password": PRABHAT_SECRET_KEY
+    },
     timeout=60
 )
 
@@ -92,26 +95,37 @@ def fetch_with_retry(url, headers, retries=5, base_delay=10):
                 raise
 
 
-def safe_update_range(worksheet, df, start_cell="A1", retries=5, base_delay=15):
+def safe_update_range(
+    worksheet,
+    df,
+    start_cell="A1",
+    max_columns=18,   # A–R
+    retries=5,
+    base_delay=15
+):
+    """
+    Clears and rewrites ONLY columns A–R.
+    Never touches column S onward.
+    """
+
     print(f"🔄 Updating sheet: {worksheet.title}")
 
     if df.empty:
         print(f"⚠️ {worksheet.title} dataframe empty — skipping update")
         return
 
+    # Safety check: ensure dataframe fits A–R
+    if len(df.columns) > max_columns:
+        raise ValueError(
+            f"❌ Dataframe has {len(df.columns)} columns, "
+            f"but max allowed is {max_columns} (A–R)"
+        )
+
     values = [df.columns.tolist()] + df.astype(str).fillna("").values.tolist()
     rows = len(values)
-    cols = len(values[0])
 
-    def col_letter(n):
-        s = ""
-        while n:
-            n, r = divmod(n - 1, 26)
-            s = chr(65 + r) + s
-        return s
-
-    end_col = col_letter(cols)
-    clear_range = f"A1:{end_col}{rows}"
+    # Clear ONLY A–R rows
+    clear_range = f"A1:R{rows}"
 
     for attempt in range(1, retries + 1):
         try:
@@ -123,7 +137,7 @@ def safe_update_range(worksheet, df, start_cell="A1", retries=5, base_delay=15):
                 values=values
             )
 
-            print(f"✅ {worksheet.title} updated successfully")
+            print(f"✅ {worksheet.title} updated successfully (A–R only)")
             return
 
         except Exception as e:
@@ -139,7 +153,7 @@ def safe_update_range(worksheet, df, start_cell="A1", retries=5, base_delay=15):
 # ======================================================
 # MAIN LOGIC
 # ======================================================
-print("Fetching Assigned data...")
+print("Fetching Assigned data from Metabase...")
 
 resp = fetch_with_retry(ASSIGNED_QUERY.strip(), METABASE_HEADERS)
 df_Assigned = pd.DataFrame(resp.json())
@@ -156,36 +170,10 @@ ws_main = sheet.worksheet("BOFU Ops")
 
 
 # ======================================================
-# UPDATE ASSIGNED SHEET
+# UPDATE ASSIGNED SHEET (A–R ONLY)
 # ======================================================
 safe_update_range(ws_assigned, df_Assigned, "A1")
 time.sleep(20)
 
 
-# ======================================================
-# UPDATE TIMESTAMP (B1)
-# ======================================================
-current_time = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%b-%Y %H:%M:%S")
-
-for attempt in range(1, 6):
-    try:
-        ws_main.update(
-            range_name="B1",
-            values=[[current_time]]
-        )
-        break
-    except Exception as e:
-        print(f"[Sheets] Timestamp update attempt {attempt} failed: {e}")
-        time.sleep(10 * attempt)
-
-print(f"✅ Updated timestamp in B1: {current_time}")
-
-
-# ======================================================
-# TIMER SUMMARY
-# ======================================================
-elapsed_time = time.time() - start_time
-mins, secs = divmod(elapsed_time, 60)
-
-print(f"⏱ Total time taken: {int(mins)}m {int(secs)}s")
-print("🎯 Assigned automation completed successfully!")
+# =====
